@@ -1,21 +1,73 @@
 import requests
 import lxml.html
+from django.core.paginator import Paginator
+from urlparse import urlparse
+import json
 
-url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q2=%28%28auxilio_exact%3A%22Aux%C3%ADlios+Regulares%22%29%29+AND+%28%28situacao_exact%3A%22Conclu%C3%ADdos%22+AND+auxilio%3A%2A%29%29'
-r = requests.get(url)
+def extract_values(value):    
+    values = []
+    if value.text:
+        values.append(value.text)
+    else:        
+        for o in value.xpath('a'):
+            if o.text:
+                values.append(o.text)
+    return values
 
-if r.status_code == 200:
-    if r.encoding in 'UTF-8':
+def get_article_details(url):
+    r = requests.get(url)
+    details = {}
+    if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
+        resume = dom.xpath('string(//*[@id="conteudo"]/div[2]/div/div/div[2]/section/div/div[1]/p[2])')
+        return {'resume': resume}
     else:
-        dom = lxml.html.fromstring(r.text.encode('utf-8'))
+        raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
+        
 
-    elements = dom.xpath('//div[@class=\"table_details\"]')    
-    for element in elements:
-        # title = element.xpath('h2/a/@title')[0]
-        title = element.xpath('h2/a/text()')[0]
-        print title
-        print element        
-else:
-    # logger.error('%s invalid status %s, from url %s' % (isbn, r.status_code, sb.url))
-    raise Exception('Error retrieve url %s, Status Code %s' % (url, r.status_code))
+def get_page(url):
+    items = []
+    r = requests.get(url)
+    url_parsed = urlparse(url)
+    if r.status_code == 200:
+        dom = lxml.html.fromstring(r.text)
+        elements = dom.xpath('//div[@class=\"table_details\"]')    
+        for element in elements:
+            artile_url = element.xpath('h2/a/@href')[0]
+            title = element.xpath('h2/a/text()')[0]            
+            artile_url = '%s://%s%s' % (url_parsed.scheme, url_parsed.netloc, artile_url)            
+            details = get_article_details(artile_url)
+            item = {'url': artile_url, 'title': title, 'properties': []}
+            item.update(details)
+
+            properties = element.xpath('table/tr')
+            for p in properties:
+                label = p.xpath('td')[0].text
+                values = p.xpath('td')[1]
+                item['properties'].append({'label': label, 'values': extract_values(values)})            
+            items.append(item)
+        return items
+    else:
+        raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
+
+
+
+start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q2=%28%28auxilio_exact%3A%22Aux%C3%ADlios+Regulares%22%29%29+AND+%28%28situacao_exact%3A%22Conclu%C3%ADdos%22+AND+auxilio%3A%2A%29%29&count=50'
+r = requests.get(start_url, allow_redirects=True)
+dom = lxml.html.fromstring(r.text)
+count = int(dom.xpath('string(//*[@id="content"]/div/div/div/div[2]/div/section/div[1]/div/div/div[1]/text())').replace('resultado(s)', '').replace('.', '').strip())
+per_page = 50
+position = 0
+objects = [None] * count
+paginator = Paginator(objects, per_page)
+
+articles = []
+for index in range(1, paginator.num_pages + 1):
+    page = paginator.page(index)
+    active_page = '{0}&page={1}'.format(start_url, page) 
+    objects = get_page(active_page)
+    articles.append(objects)
+    print objects    
+    print page
+    with open('data/page_{0}.json'.format(index), 'w') as fp:
+        json.dump(articles, fp)    
