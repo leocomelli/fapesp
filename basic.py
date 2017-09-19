@@ -20,12 +20,16 @@ def get_article_details(url):
     if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
         resume = dom.xpath('string(//*[@id="conteudo"]/div[2]/div/div/div[2]/section/div/div[1]/p[2])')
-        return {'resume': resume}
+        publication_type = dom.xpath('string(//div[@class="description"]/span)')
+        total = dom.xpath('//div[@class="description"]/text()')
+        return {'resume': resume, 'publication_type': publication_type.encode('ascii', 'ignore'), 'total': total}
     else:
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
         
 
 def get_page(url):
+    print '{0}'.format(url)
+    
     items = []
     r = requests.get(url)
     url_parsed = urlparse(url)
@@ -61,13 +65,10 @@ position = 0
 objects = [None] * count
 paginator = Paginator(objects, per_page)
 
-articles = []
 for index in range(1, paginator.num_pages + 1):
     page = paginator.page(index)
-    active_page = '{0}&page={1}'.format(start_url, page) 
-    objects = get_page(active_page)
-    articles.append(objects)
-    print objects    
+    active_page = '{0}&page={1}'.format(start_url, index) 
+    articles = get_page(active_page)
     print page
     with open('data/page_{0}.json'.format(index), 'w') as fp:
         json.dump(articles, fp)    
