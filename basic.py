@@ -3,33 +3,46 @@ import lxml.html
 from django.core.paginator import Paginator
 from urlparse import urlparse
 import json
+import unicodedata
+
+
+def remove_accents(input_str):
+    try:
+        nfkd_form = unicodedata.normalize('NFKD', input_str)
+        return u"".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    except Exception:
+        return input_str
 
 def extract_values(value):    
     values = []
     if value.text:
-        values.append(value.text)
+        values.append(remove_accents(value.text))
     else:        
         for o in value.xpath('a'):
             if o.text:
-                values.append(o.text)
+                values.append(remove_accents(o.text))
     return values
 
 def get_article_details(url):
+    print url
     r = requests.get(url)
-    details = {}
     if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
-        resume = dom.xpath('string(//*[@id="conteudo"]/div[2]/div/div/div[2]/section/div/div[1]/p[2])')
-        publication_type = dom.xpath('string(//div[@class="description"]/span)')
-        total = dom.xpath('//div[@class="description"]/text()')
-        return {'resume': resume, 'publication_type': publication_type.encode('ascii', 'ignore'), 'total': total}
+        resume = remove_accents(dom.xpath('string(//*[@id="conteudo"]/div[2]/div/div/div[2]/section/div/div[1]/p[2])'))
+        details = {'resume': resume, 'citations': []}
+        citations = dom.xpath('//div[@class="description"]')
+        for citation in citations:
+            if len(citation.xpath('span/text()')):
+                publication_type =  remove_accents(citation.xpath('span/text()')[0])
+                total = len(citation.xpath('div')) - 1
+                details['citations'].append({'type': publication_type, 'total': total})
+        return details
     else:
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
         
 
 def get_page(url):
-    print '{0}'.format(url)
-    
+    print '{0}'.format(url)    
     items = []
     r = requests.get(url)
     url_parsed = urlparse(url)
@@ -38,7 +51,7 @@ def get_page(url):
         elements = dom.xpath('//div[@class=\"table_details\"]')    
         for element in elements:
             artile_url = element.xpath('h2/a/@href')[0]
-            title = element.xpath('h2/a/text()')[0]            
+            title = remove_accents(element.xpath('h2/a/text()')[0])
             artile_url = '%s://%s%s' % (url_parsed.scheme, url_parsed.netloc, artile_url)            
             details = get_article_details(artile_url)
             item = {'url': artile_url, 'title': title, 'properties': []}
@@ -53,8 +66,6 @@ def get_page(url):
         return items
     else:
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
-
-
 
 start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q2=%28%28auxilio_exact%3A%22Aux%C3%ADlios+Regulares%22%29%29+AND+%28%28situacao_exact%3A%22Conclu%C3%ADdos%22+AND+auxilio%3A%2A%29%29&count=50'
 r = requests.get(start_url, allow_redirects=True)
