@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-import os, re
+import os
+import re
+import sys
+import json
 import requests
 import lxml.html
-from django.core.paginator import Paginator
-from urlparse import urlparse
-import json
 import unicodedata
+from urlparse import urlparse
+from multiprocessing.dummy import Pool as ThreadPool
 
 
 def remove_accents(input_str):
@@ -68,7 +70,7 @@ def extract_google_scholar(url):
     if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
 
-        lines = dom.xpath('//*[@id="gsc_rsb_st"]/tr')
+        lines = dom.xpath('//table[@id=\"gsc_rsb_st\"]/tbody/tr')
         for line in lines:
             if len(line.xpath('td')) > 0:
                 label = line.xpath('td')[0].xpath('a')[0].text
@@ -118,8 +120,12 @@ def get_article_details(url):
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
         
 
-def get_page(url):
-    print '{0}'.format(url)    
+def get_page(page):
+    page += 1
+    start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q=&&count=50'
+    url = '{0}&page={1}'.format(start_url, page)
+
+    print '{0} - {1}\n'.format(page, url)    
     items = []
     r = requests.get(url)
     url_parsed = urlparse(url)
@@ -136,28 +142,20 @@ def get_page(url):
             item.update(extract_properties(element.xpath('table/tr')))
 
             items.append(item)
-        return items
+
+        with open('data/full/page_{0}.json'.format(page), 'w') as fp:
+            json.dump(items, fp)
     else:
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
 
 
 def main():
-    start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q2=auxilio_exact%3A%22Aux%C3%ADlios+Regulares%22&&count=50'
-    r = requests.get(start_url, allow_redirects=True)
-    dom = lxml.html.fromstring(r.text)
-    count = int(dom.xpath('string(//*[@id="content"]/div/div/div/div[2]/div/section/div[1]/div/div/div[1]/text())').replace('resultado(s)', '').replace('.', '').strip())
-    per_page = 50
-    position = 0
-    objects = [None] * count
-    paginator = Paginator(objects, per_page)
+    pool = ThreadPool(10)
+    pages = list(range(4507))
 
-    for index in range(1, paginator.num_pages + 1):
-        page = paginator.page(index)
-        active_page = '{0}&page={1}'.format(start_url, index)
-        articles = get_page(active_page)
-        print page
-        with open('data/page_{0}.json'.format(index), 'w') as fp:
-            json.dump(articles, fp)
+    pool.map(get_page, pages)
+    pool.close() 
+    pool.join() 
 
 
 if __name__ == "__main__":
