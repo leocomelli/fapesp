@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
 import os
 import re
-import sys
 import json
 import requests
 import lxml.html
 import unicodedata
 from urlparse import urlparse
 from multiprocessing.dummy import Pool as ThreadPool
+
+import time
+
+processed_pages = []
+pages = 4507
+out = 'data/full/'
+start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q=&&count=50'
+gscholar_cache = {}
 
 
 def remove_accents(input_str):
@@ -51,14 +58,16 @@ def extract_properties(props):
         elif label == 'processo':
             properties[label] = values[0]
         elif label == 'pesquisador_responsavel':
+            properties[label] = values
             onclick_value = p.xpath('td')[1].xpath('a[@class="plataforma_google"]/@onclick')
             if len(onclick_value) > 0:
                 url = re.findall(r'(http|ftp|https)://([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:/~+#-]*[\w@?^=%&/~+#-])?',
                                  onclick_value[0])
                 url = 'http://%s' % ''.join(url[0][1:])
-                properties['google_scholar'] = {'url': url,
-                                                'metricas': extract_google_scholar(url)}
 
+                #gmetrics = extract_google_scholar(url)
+                gmetrics = {}
+                properties['google_scholar'] = {'url': url, 'metricas': gmetrics}
         else:
             properties[label] = values
     return properties
@@ -66,10 +75,10 @@ def extract_properties(props):
 
 def extract_google_scholar(url):
     r = requests.get(url)
+
     metrics = {}
     if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
-
         lines = dom.xpath('//table[@id=\"gsc_rsb_st\"]/tbody/tr')
         for line in lines:
             if len(line.xpath('td')) > 0:
@@ -78,6 +87,9 @@ def extract_google_scholar(url):
                 value = extract_values(line.xpath('td')[1])
 
                 metrics[label] = value
+
+    if len(metrics) == 0:
+        print '*** google scholar metrics is empty - http_code: {0}, url: {1}'.format(r.status_code, url)
 
     return metrics
 
@@ -121,42 +133,69 @@ def get_article_details(url):
         
 
 def get_page(page):
+    global start_url, out
+
     page += 1
-    start_url = 'http://bv.fapesp.br/pt/pesquisa/?sort=-data_inicio&q=&&count=50'
     url = '{0}&page={1}'.format(start_url, page)
 
-    print '{0} - {1}\n'.format(page, url)    
+    if check_page(page):
+        return
+
+    print '{0}\n'.format(url)
     items = []
     r = requests.get(url)
     url_parsed = urlparse(url)
     if r.status_code == 200:
         dom = lxml.html.fromstring(r.text)
-        elements = dom.xpath('//div[@class=\"table_details\"]')    
+        elements = dom.xpath('//div[@class=\"table_details\"]')
         for element in elements:
-            article_url = element.xpath('h2/a/@href')[0]
-            title = remove_accents(element.xpath('h2/a/text()')[0])
-            article_url = '%s://%s%s' % (url_parsed.scheme, url_parsed.netloc, article_url)
+            try:
+                article_url = element.xpath('h2/a/@href')[0]
+                title = remove_accents(element.xpath('h2/a/text()')[0])
+                article_url = '%s://%s%s' % (url_parsed.scheme, url_parsed.netloc, article_url)
 
-            item = {'url': article_url, 'titulo': title}
-            item.update(get_article_details(article_url))
-            item.update(extract_properties(element.xpath('table/tr')))
+                item = {'url': article_url, 'titulo': title}
+                item.update(get_article_details(article_url))
+                item.update(extract_properties(element.xpath('table/tr')))
 
-            items.append(item)
+                items.append(item)
+            except Exception as e:
+                print e
 
-        with open('data/full/page_{0}.json'.format(page), 'w') as fp:
+        with open('{0}/page_{1}.json'.format(out, page), 'w') as fp:
             json.dump(items, fp)
     else:
         raise Exception('error retrieve url %s, status code %s' % (url, r.status_code))
 
 
-def main():
-    pool = ThreadPool(10)
-    pages = list(range(4507))
+def check_page(page):
+    global processed_pages
+    if len(processed_pages) == 0:
+        files = sorted(os.listdir(out))
+        processed_pages = [int(filter(str.isdigit, f)) for f in files if f.endswith('.json')]
 
-    pool.map(get_page, pages)
+    return page in processed_pages
+
+
+def main():
+    global processed_pages
+    processed_pages = []
+
+    pool = ThreadPool(20)
+
+    global pages
+    arr_pages = list(range(pages))
+    pool.map(get_page, arr_pages)
     pool.close() 
     pool.join() 
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        try:
+            main()
+        except Exception as e:
+            print e
+            time.sleep(10)
+            continue
+        break
